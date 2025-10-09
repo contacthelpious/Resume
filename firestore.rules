@@ -1,0 +1,87 @@
+/**
+ * @fileoverview Firestore Security Rules for ResumeFlow application.
+ *
+ * Core Philosophy:
+ * This ruleset enforces a strict user-ownership model. Users can only access their own data,
+ * with the exception of publicly available resume templates.
+ *
+ * Data Structure:
+ * - /users/{userId}: Stores user profile information. Accessible only by the user with the matching UID.
+ * - /users/{userId}/resumes/{resumeId}: Stores resumes created by the user. Accessible only by the user with the matching UID.
+ * - /templates/{templateId}: Stores resume templates. Publicly accessible.
+ *
+ * Key Security Decisions:
+ * - Users can only list resumes within their own user document.
+ * - Public listing of users is disallowed to protect user privacy.
+ *
+ * Denormalization for Authorization:
+ *  The data structure is designed to embed authorization information within the path itself,
+ *  avoiding the need for complex queries or `get()` calls in the security rules. The userId is contained in the path of the resumes collection.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /**
+     * @description Enforces user-level access control for user profiles.
+     * @path /users/{userId}
+     * @allow (create) If the user is creating their own profile (UID matches userId).
+     * @allow (get, update, delete) If the user is accessing their own profile (UID matches userId).
+     * @deny (create) If the user is trying to create a profile for another user.
+     * @deny (get, update, delete) If the user is trying to access another user's profile.
+     * @principle Enforces document ownership for writes and reads.
+     */
+    match /users/{userId} {
+      function isOwner(userId) {
+        return request.auth != null && request.auth.uid == userId;
+      }
+
+      function isExistingOwner(userId) {
+        return isOwner(userId) && resource != null;
+      }
+
+      allow create: if isOwner(userId) && request.resource.data.id == userId;
+      allow get: if isOwner(userId);
+      allow list: if false;
+      allow update: if isExistingOwner(userId) && request.resource.data.id == resource.data.id;
+      allow delete: if isExistingOwner(userId);
+    }
+
+    /**
+     * @description Enforces user-level access control for resumes.
+     * @path /users/{userId}/resumes/{resumeId}
+     * @allow (create) If the user is creating a resume under their own profile (UID matches userId).
+     * @allow (get, list, update, delete) If the user is accessing their own resume (UID matches userId).
+     * @deny (create) If the user is trying to create a resume under another user's profile.
+     * @deny (get, list, update, delete) If the user is trying to access another user's resume.
+     * @principle Restricts access to a user's own data tree.
+     */
+    match /users/{userId}/resumes/{resumeId} {
+      function isOwner(userId) {
+        return request.auth != null && request.auth.uid == userId;
+      }
+
+      function isExistingOwner(userId) {
+        return isOwner(userId) && resource != null;
+      }
+
+      allow create: if isOwner(userId);
+      allow get: if isOwner(userId);
+      allow list: if isOwner(userId);
+      allow update: if isExistingOwner(userId);
+      allow delete: if isExistingOwner(userId);
+    }
+
+    /**
+     * @description Allows public read access to resume templates. Write access is not defined and should be managed through other mechanisms.
+     * @path /templates/{templateId}
+     * @allow (get, list) All users can read templates.
+     * @deny (create, update, delete) No client-side write operations are permitted.
+     * @principle Enables public access for read-only data.
+     */
+    match /templates/{templateId} {
+      allow get, list: if true;
+      allow create, update, delete: if false;
+    }
+  }
+}
